@@ -17,6 +17,7 @@ def save_nth_frame(cap, n, output_path):
 def __main__():
     video = open_video("tennis.mp4")
     frame_number = frame_count(video)
+    print(f"Found {frame_number} frames")
     for i in range(frame_number):
         save_nth_frame(video, i, f"debug/frame_{i}.jpg")
 
