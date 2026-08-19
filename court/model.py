@@ -58,6 +58,3 @@ class Court:
         [self.court_w - self.singles_sideline, self.court_l/2],
         [self.court_w, self.court_l/2],
         ])
-
-court = Court()
-print(court.right_double_far)
