@@ -154,6 +154,33 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _is_valid_outer_quad(ordered: np.ndarray) -> bool:
+    """Return True if `ordered` (NL, NR, FR, FL) can define a court homography.
+
+    Width/height checks alone accept collapsed quads: a triangle with two corners
+    1px apart still has a wide 'far baseline' (the long diagonal) and enough
+    mean-y gap. getPerspectiveTransform succeeds on those points and yields an
+    ill-conditioned H that silently maps the whole court onto a line.
+    """
+    near_left, near_right, far_right, far_left = ordered
+    near_w = float(np.linalg.norm(near_right - near_left))
+    far_w = float(np.linalg.norm(far_right - far_left))
+    left_h = float(np.linalg.norm(near_left - far_left))
+    right_h = float(np.linalg.norm(near_right - far_right))
+    height = abs(
+        0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
+    )
+    if near_w < 80.0 or far_w < 40.0 or height < 80.0 or near_w < far_w:
+        return False
+    if left_h < 80.0 or right_h < 80.0:
+        return False
+    for i in range(4):
+        for j in range(i + 1, 4):
+            if float(np.linalg.norm(ordered[i] - ordered[j])) < 40.0:
+                return False
+    return True
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -201,13 +228,7 @@ def _intersect_outer_lines(
                     if not all(np.isfinite(p).all() and _point_in_frame(p, shape) for p in pts):
                         continue
                     ordered = _order_corners(pts, shape)
-                    near_left, near_right, far_right, far_left = ordered
-                    near_w = float(np.linalg.norm(near_right - near_left))
-                    far_w = float(np.linalg.norm(far_right - far_left))
-                    height = abs(
-                        0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
-                    )
-                    if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                    if not _is_valid_outer_quad(ordered):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
