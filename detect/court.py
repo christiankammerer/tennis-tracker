@@ -154,6 +154,33 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _is_full_court_extent(ordered: np.ndarray, shape: tuple[int, ...]) -> bool:
+    """Return True if `ordered` (NL, NR, FR, FL) spans a full baseline-view court.
+
+    Net and service lines are nearly horizontal, so `_is_baseline` treats them
+    as baselines. Pairing the net with one true baseline yields a valid
+    trapezoid that passes the width/height checks. `_model_support` can still
+    score that half-court highly because the far (or near) half has a similar
+    line layout to a scaled full court — then `getPerspectiveTransform`
+    maps the 23.77 m model onto ~half the image and every bounce coordinate
+    is stretched by ~2× in y.
+
+    In this camera model the far baseline sits in the upper part of the frame
+    and the near baseline in the lower part. Half-court winners do not.
+    """
+    near_left, near_right, far_right, far_left = ordered
+    frame_h = float(shape[0])
+    near_y = 0.5 * (float(near_left[1]) + float(near_right[1]))
+    far_y = 0.5 * (float(far_left[1]) + float(far_right[1]))
+    if (near_y - far_y) < 0.35 * frame_h:
+        return False
+    if far_y > 0.42 * frame_h:
+        return False
+    if near_y < 0.58 * frame_h:
+        return False
+    return True
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -208,6 +235,8 @@ def _intersect_outer_lines(
                         0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
                     )
                     if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                        continue
+                    if not _is_full_court_extent(ordered, shape):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
