@@ -79,6 +79,28 @@ def _segment_length(line: np.ndarray) -> float:
     return float(np.hypot(x2 - x1, y2 - y1))
 
 
+def _fit_infinite_line(group: list[np.ndarray]) -> np.ndarray:
+    pts = np.asarray(group, dtype=np.float32).reshape(-1, 2)
+    vx, vy, x0, y0 = (float(v) for v in cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).ravel())
+    s = 10000.0
+    return np.array([x0 - vx * s, y0 - vy * s, x0 + vx * s, y0 + vy * s])
+
+
+def _max_endpoint_line_distance(seg: np.ndarray, line: np.ndarray) -> float:
+    """Largest distance from either segment endpoint to the infinite `line`."""
+    x1, y1, x2, y2 = map(float, line)
+    dx, dy = x2 - x1, y2 - y1
+    denom = float(np.hypot(dx, dy))
+    if denom < 1e-6:
+        return float("inf")
+
+    def dist(px: float, py: float) -> float:
+        return abs((px - x1) * dy - (py - y1) * dx) / denom
+
+    sx1, sy1, sx2, sy2 = map(float, seg)
+    return max(dist(sx1, sy1), dist(sx2, sy2))
+
+
 def _cluster_collinear(
     lines: np.ndarray,
     angle_tol: float = 4.0,
@@ -87,28 +109,32 @@ def _cluster_collinear(
     groups: list[list[np.ndarray]] = []
     keys: list[tuple[float, float]] = []
     supports: list[float] = []
+    fitted: list[np.ndarray] = []
 
     for line in lines:
         angle, rho = _angle_and_rho(line)
         placed = False
         for i, (ga, gr) in enumerate(keys):
             if _angle_diff(angle, ga) < angle_tol and abs(rho - gr) < rho_tol:
+                # Angle/rho of infinite lines can match while the segments are
+                # tens of pixels apart in the image (they fan out). tennis2.mp4
+                # frame 0 merges the far baseline (y=164) with a 3° ad line near
+                # y=90; fitLine then tilts the "baseline" off the court and the
+                # far service line wins the homography.
+                if _max_endpoint_line_distance(line, fitted[i]) > rho_tol:
+                    continue
                 groups[i].append(line)
                 supports[i] += _segment_length(line)
+                fitted[i] = _fit_infinite_line(groups[i])
                 placed = True
                 break
         if not placed:
             groups.append([line])
             keys.append((angle, rho))
             supports.append(_segment_length(line))
+            fitted.append(np.asarray(line, dtype=float))
 
-    merged = []
-    for group in groups:
-        pts = np.asarray(group, dtype=np.float32).reshape(-1, 2)
-        vx, vy, x0, y0 = (float(v) for v in cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).ravel())
-        s = 10000.0
-        merged.append(np.array([x0 - vx * s, y0 - vy * s, x0 + vx * s, y0 + vy * s]))
-    return merged, supports
+    return [_fit_infinite_line(group) for group in groups], supports
 
 
 def _model_segments(court: Court) -> list[tuple[tuple[float, float], tuple[float, float]]]:
