@@ -9,6 +9,11 @@ from court.model import Court
 
 CORNER_ORDER = ("near_left", "near_right", "far_right", "far_left")
 
+# `_find_white_lines` only zeros the bottom 10% of the frame. On tennis2.mp4 the
+# US Open score graphic occupies ~86–90% of frame height, so those strokes are
+# still Hough-detected as a high-support "baseline".
+SCORE_OVERLAY_Y_FRAC = 0.85
+
 
 @dataclass
 class CourtDetection:
@@ -154,6 +159,19 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _touches_broadcast_overlay(ordered: np.ndarray, shape: tuple[int, ...]) -> bool:
+    """Return True if a corner sits in the broadcast score-bug band.
+
+    Pairing the overlay's white strokes with court lines puts a homography
+    corner on the DJOKOVIC graphic (tennis2.mp4 frame 1500) or collapses the
+    quad along the overlay (frame 1800). Real near baselines on this camera
+    sit at ~70–78% of frame height; the bottom 15% is overlay, not court.
+    """
+    overlay_y = SCORE_OVERLAY_Y_FRAC * float(shape[0])
+    pts = np.asarray(ordered, dtype=np.float32).reshape(-1, 2)
+    return any(float(pt[1]) > overlay_y for pt in pts)
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -208,6 +226,8 @@ def _intersect_outer_lines(
                         0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
                     )
                     if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                        continue
+                    if _touches_broadcast_overlay(ordered, shape):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
