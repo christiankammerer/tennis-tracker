@@ -9,6 +9,10 @@ from court.model import Court
 
 CORNER_ORDER = ("near_left", "near_right", "far_right", "far_left")
 
+# On this camera a full court has (near_y - far_y) / near_w ≈ 0.47.
+# Pairing the near baseline with the far service line yields ≈ 0.37.
+MIN_COURT_HEIGHT_OVER_NEAR_WIDTH = 0.42
+
 
 @dataclass
 class CourtDetection:
@@ -154,6 +158,29 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _is_full_court_aspect(ordered: np.ndarray) -> bool:
+    """Return True if the trapezoid is tall enough to be a full court.
+
+    Service lines are classified as baselines (`_is_baseline`). Pairing the
+    near baseline with the far service line still passes the width/height
+    checks. `_model_support` then prefers that quad: the real far baseline
+    is faint (~0.2 hit rate) while the service line is bright, so it scores
+    ~0.9 when used as a fake far baseline. `getPerspectiveTransform` maps
+    23.77 m onto the near-baseline→far-service span (~18.3 m) and stretches
+    every bounce coordinate.
+
+    Concrete trigger: tennis2.mp4 frame 450 scores the service-line quad
+    6.72 vs 6.60 for the true far baseline.
+    """
+    near_left, near_right, far_right, far_left = ordered
+    near_w = float(np.linalg.norm(near_right - near_left))
+    if near_w < 1.0:
+        return False
+    near_y = 0.5 * (float(near_left[1]) + float(near_right[1]))
+    far_y = 0.5 * (float(far_left[1]) + float(far_right[1]))
+    return (near_y - far_y) / near_w >= MIN_COURT_HEIGHT_OVER_NEAR_WIDTH
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -208,6 +235,8 @@ def _intersect_outer_lines(
                         0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
                     )
                     if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                        continue
+                    if not _is_full_court_aspect(ordered):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
