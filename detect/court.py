@@ -9,6 +9,13 @@ from court.model import Court
 
 CORNER_ORDER = ("near_left", "near_right", "far_right", "far_left")
 
+# Real court frames have ~2–4% white pixels after the line mask (painted lines
+# on a dark surface). US Open bumper graphics in tennis.mp4 are ~75–95% white,
+# so every sample in `_model_support` hits and a random trapezoid on the card
+# outscores the actual court (9.9 vs ~6.2) with confidence 1.0.
+MAX_LINE_MASK_FILL = 0.15
+MAX_QUAD_INTERIOR_WHITE = 0.15
+
 
 @dataclass
 class CourtDetection:
@@ -154,11 +161,33 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _fill_fraction(mask: np.ndarray) -> float:
+    if mask.size == 0:
+        return 0.0
+    return float((mask > 0).mean())
+
+
+def _quad_interior_white_fraction(white: np.ndarray, ordered: np.ndarray) -> float:
+    """Fraction of white-mask pixels inside the NL/NR/FR/FL trapezoid."""
+    poly = np.round(np.asarray(ordered, dtype=np.float32)).astype(np.int32)
+    if poly.shape != (4, 2):
+        poly = poly.reshape(4, 2)
+    interior = np.zeros(white.shape[:2], dtype=np.uint8)
+    cv2.fillConvexPoly(interior, poly, 255)
+    pixels = white[interior > 0]
+    if pixels.size == 0:
+        return 1.0
+    return float((pixels > 0).mean())
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
     white: np.ndarray,
 ) -> np.ndarray:
+    if _fill_fraction(white) > MAX_LINE_MASK_FILL:
+        raise RuntimeError("White-line mask is too dense for a tennis court")
+
     merged, supports = _cluster_collinear(lines)
 
     baselines, sidelines = [], []
@@ -208,6 +237,8 @@ def _intersect_outer_lines(
                         0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
                     )
                     if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                        continue
+                    if _quad_interior_white_fraction(white, ordered) > MAX_QUAD_INTERIOR_WHITE:
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
