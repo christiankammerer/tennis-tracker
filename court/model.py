@@ -24,6 +24,24 @@ class Court:
         ])
 
     @property
+    def singles_corners(self):
+        """Singles court corners, same order as court_corners.
+
+        court_corners is the doubles rectangle (width court_w). Singles
+        sidelines sit singles_sideline metres inside each doubles sideline.
+        """
+        x0 = self.singles_sideline
+        x1 = self.court_w - self.singles_sideline
+        return np.array(
+            [
+                [x0, self.court_l],
+                [x1, self.court_l],
+                [x1, 0],
+                [x0, 0],
+            ]
+        )
+
+    @property
     def left_double_near(self):
         return np.array([
         [0,0], 

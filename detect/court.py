@@ -19,11 +19,35 @@ class CourtDetection:
 def detect_court(frame: np.ndarray) -> CourtDetection:
     """Return the 4 outer court corners in pixel coordinates.
     Order: near-left, near-right, far-right, far-left.
+
+    The painted lines this detector locks onto are the singles court
+    (blue rectangle on a US Open broadcast). Court.court_corners is the
+    doubles rectangle, so the singles quad is lifted to doubles pixels
+    before returning. Callers can then build H from court_corners.
     """
     white, lines = _find_white_lines(frame)
     raw_corners = _intersect_outer_lines(lines, frame.shape, white)
-    corners = _order_corners(raw_corners, frame.shape)
+    singles = _order_corners(raw_corners, frame.shape)
+    corners = _lift_singles_quad_to_doubles(singles)
     return CourtDetection(corners=corners, confidence=1.0)
+
+
+def _lift_singles_quad_to_doubles(
+    singles_pixels: np.ndarray, court: Court | None = None
+) -> np.ndarray:
+    """Map a detected singles-pixel quad to doubles-pixel corners.
+
+    H is built from Court.singles_corners → singles_pixels, then
+    Court.court_corners are projected into the image.
+    """
+    court = court or Court()
+    src = np.asarray(court.singles_corners, dtype=np.float32).reshape(4, 2)
+    dst = np.asarray(singles_pixels, dtype=np.float32).reshape(4, 2)
+    H = cv2.getPerspectiveTransform(src, dst)
+    doubles = cv2.perspectiveTransform(
+        np.asarray(court.court_corners, dtype=np.float32).reshape(-1, 1, 2), H
+    )
+    return doubles.reshape(4, 2).astype(np.float32)
 
 
 def _find_white_lines(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
