@@ -9,6 +9,11 @@ from court.model import Court
 
 CORNER_ORDER = ("near_left", "near_right", "far_right", "far_left")
 
+# On this camera a full court has (near_y - far_y) / near_w ≈ 0.47.
+# Extending the sidelines to a back-surround line behind the far baseline
+# yields ≥ 0.50, so bounce y is scaled onto a longer-than-court span.
+MAX_COURT_HEIGHT_OVER_NEAR_WIDTH = 0.49
+
 
 @dataclass
 class CourtDetection:
@@ -154,6 +159,30 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _far_edge_past_baseline(ordered: np.ndarray) -> bool:
+    """Return True if the trapezoid is taller than a full court.
+
+    `_is_baseline` treats every near-horizontal line as a baseline, including
+    the bright edge of the back surround / advertising boards behind the far
+    baseline. Pairing that line with the near baseline still passes the
+    width/height checks. `_model_support` then prefers it: white logos on the
+    boards score as a fake far baseline, beating the true far-baseline quad
+    (5.999 vs 5.875 on tennis2.mp4 frame 1050). `getPerspectiveTransform`
+    maps 23.77 m onto the near-baseline→back-surround span, so a bounce on
+    the true far baseline projects to court y ≈ 5.5 m (the service line).
+
+    Concrete trigger: tennis2.mp4 frame 1050 returns far edge y=146 (behind
+    the court) instead of y≈189 (far baseline).
+    """
+    near_left, near_right, far_right, far_left = ordered
+    near_w = float(np.linalg.norm(near_right - near_left))
+    if near_w < 1.0:
+        return True
+    near_y = 0.5 * (float(near_left[1]) + float(near_right[1]))
+    far_y = 0.5 * (float(far_left[1]) + float(far_right[1]))
+    return (near_y - far_y) / near_w > MAX_COURT_HEIGHT_OVER_NEAR_WIDTH
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -208,6 +237,8 @@ def _intersect_outer_lines(
                         0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
                     )
                     if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                        continue
+                    if _far_edge_past_baseline(ordered):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
