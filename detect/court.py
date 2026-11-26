@@ -9,6 +9,20 @@ from court.model import Court
 
 CORNER_ORDER = ("near_left", "near_right", "far_right", "far_left")
 
+# Absolute floors (pixels) plus frame-relative size floors.
+# A broadcast court has near_w ≈ 55–70% of frame width, height ≈ 45–55% of
+# frame height, and area ≈ 20–27% of the frame. Player close-ups in
+# tennis.mp4 (e.g. frame 2340) still pass the 80 px checks: first an
+# ~80×110 rectangle on a shirt, then a ~470×120 trapezoid across the
+# torso, both returned at confidence 1.0. These fractions sit well below
+# real courts and above those close-up patches.
+MIN_NEAR_W = 80.0
+MIN_FAR_W = 40.0
+MIN_HEIGHT = 80.0
+MIN_NEAR_WIDTH_FRAC = 0.45
+MIN_HEIGHT_FRAC = 0.25
+MIN_AREA_FRAC = 0.15
+
 
 @dataclass
 class CourtDetection:
@@ -154,6 +168,27 @@ def _point_in_frame(pt: np.ndarray, shape: tuple[int, ...], margin: float = 40.0
     return -margin <= x < width + margin and -margin <= y < height + margin
 
 
+def _is_plausible_outer_quad(ordered: np.ndarray, shape: tuple[int, ...]) -> bool:
+    """Reject degenerate or close-up-sized quads that cannot be a full court."""
+    near_left, near_right, far_right, far_left = ordered
+    near_w = float(np.linalg.norm(near_right - near_left))
+    far_w = float(np.linalg.norm(far_right - far_left))
+    height = abs(
+        0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
+    )
+    if near_w < MIN_NEAR_W or far_w < MIN_FAR_W or height < MIN_HEIGHT or near_w < far_w:
+        return False
+    frame_h, frame_w = float(shape[0]), float(shape[1])
+    if near_w < MIN_NEAR_WIDTH_FRAC * frame_w:
+        return False
+    if height < MIN_HEIGHT_FRAC * frame_h:
+        return False
+    area = float(cv2.contourArea(np.asarray(ordered, dtype=np.float32)))
+    if area < MIN_AREA_FRAC * frame_h * frame_w:
+        return False
+    return True
+
+
 def _intersect_outer_lines(
     lines: np.ndarray,
     shape: tuple[int, ...],
@@ -201,13 +236,7 @@ def _intersect_outer_lines(
                     if not all(np.isfinite(p).all() and _point_in_frame(p, shape) for p in pts):
                         continue
                     ordered = _order_corners(pts, shape)
-                    near_left, near_right, far_right, far_left = ordered
-                    near_w = float(np.linalg.norm(near_right - near_left))
-                    far_w = float(np.linalg.norm(far_right - far_left))
-                    height = abs(
-                        0.5 * (near_left[1] + near_right[1]) - 0.5 * (far_left[1] + far_right[1])
-                    )
-                    if near_w < 80 or far_w < 40 or height < 80 or near_w < far_w:
+                    if not _is_plausible_outer_quad(ordered, shape):
                         continue
                     try:
                         H = cv2.getPerspectiveTransform(court_src, ordered)
